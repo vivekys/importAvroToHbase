@@ -3,16 +3,16 @@ package importAvro;
 
 import org.apache.avro.Schema;
 import org.apache.avro.file.DataFileReader;
+import org.apache.avro.generic.GenericData;
 import org.apache.avro.generic.GenericDatumReader;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.avro.io.DatumReader;
-import org.apache.avro.mapred.AvroInputFormat;
-import org.apache.avro.mapred.AvroJob;
-import org.apache.avro.mapred.AvroWrapper;
+import org.apache.avro.mapred.AvroKey;
 import org.apache.avro.mapred.FsInput;
+import org.apache.avro.mapreduce.AvroJob;
+import org.apache.avro.mapreduce.AvroKeyInputFormat;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.client.HBaseAdmin;
 import org.apache.hadoop.hbase.client.HTable;
@@ -21,7 +21,6 @@ import org.apache.hadoop.hbase.mapreduce.HFileOutputFormat;
 import org.apache.hadoop.hbase.mapreduce.LoadIncrementalHFiles;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.io.NullWritable;
-import org.apache.hadoop.mapred.JobConf;
 import org.apache.hadoop.mapreduce.Job;
 import org.apache.hadoop.mapreduce.Mapper;
 import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
@@ -38,8 +37,6 @@ public class SimpleImportAvro {
 
     private static Schema schema;
     private static String tableName;
-    private static String rowKeyName;
-    private static String columnFamily;
 
     private static DataFileReader<GenericRecord> read(Path filename) throws IOException
     {
@@ -59,9 +56,9 @@ public class SimpleImportAvro {
         return reader.getSchema();
     }
 
-    public class AvroImporter extends Mapper <AvroWrapper<GenericRecord>, NullWritable, ImmutableBytesWritable, KeyValue> {
+    public static class AvroImporter extends Mapper <AvroKey<GenericData.Record>, NullWritable, ImmutableBytesWritable, KeyValue> {
         @Override
-        protected void map(AvroWrapper<GenericRecord> key, NullWritable value, Context context)
+        protected void map(AvroKey<GenericData.Record> key, NullWritable value, Context context)
                 throws IOException, InterruptedException
         {
             GenericRecord record = key.datum();
@@ -71,7 +68,11 @@ public class SimpleImportAvro {
             for (Schema.Field f : fields)
             {
                 columns.add(Bytes.toBytes(f.name()));
+                System.out.println(f.name());
             }
+            String rowKeyName = context.getConfiguration().get("importavro.rowkey");
+            String columnFamily = context.getConfiguration().get("importavro.columnf");
+
             byte [] rawRowKey = Bytes.toBytes(record.get(rowKeyName).toString());
             ImmutableBytesWritable rowKey = new ImmutableBytesWritable(rawRowKey);
             for (int i = 0; i < fields.size(); i++) {
@@ -88,28 +89,25 @@ public class SimpleImportAvro {
 
     private static Job createSubmitableJob(Configuration conf) throws IOException
     {
+        conf.set(HBASE_CONFIGURATION_ZOOKEEPER_QUORUM, conf.get("importavro.hbase.zookeeper.quorum"));
+        conf.set(HBASE_CONFIGURATION_ZOOKEEPER_CLIENTPORT, conf.get("importavro.hbase.zookeeper.property.clientPort"));
+        conf.set("hbase.table.name", tableName);
 
-        JobConf jobConf = new JobConf(conf);
+        Job job = new Job(conf);
+        job.setJarByClass(AvroImporter.class);
 
-        jobConf.set(HBASE_CONFIGURATION_ZOOKEEPER_QUORUM, conf.get("importavro.hbase.zookeeper.quorum"));
-        jobConf.set(HBASE_CONFIGURATION_ZOOKEEPER_CLIENTPORT, conf.get("importavro.hbase.zookeeper.property.clientPort"));
-        jobConf.set("hbase.table.name", tableName);
-
-        System.out.println("Hbase loc1 - " + jobConf.get(HBASE_CONFIGURATION_ZOOKEEPER_QUORUM));
-        jobConf.setJobName("importAvro" + "-" + tableName);
-        jobConf.setInputFormat(AvroInputFormat.class);
-        AvroJob.setInputSchema(jobConf, schema);
-
-        System.out.println("Hbase loc2 - " + jobConf.get(HBASE_CONFIGURATION_ZOOKEEPER_QUORUM));
-        Job job = new Job(jobConf);
         FileInputFormat.setInputPaths(job, new Path(conf.get("importavro.inputPath")));
         FileOutputFormat.setOutputPath(job, new Path(conf.get("importavro.outputPath")));
+
+        AvroJob.setInputKeySchema(job, schema);
+
+        job.setJobName("importAvro" + "-" + tableName);
 
         job.setMapperClass(AvroImporter.class);
         job.setMapOutputKeyClass(ImmutableBytesWritable.class);
         job.setMapOutputValueClass(KeyValue.class);
+        job.setInputFormatClass(AvroKeyInputFormat.class);
 
-        System.out.println("Hbase loc3 - " + job.getConfiguration().get(HBASE_CONFIGURATION_ZOOKEEPER_QUORUM));
         HTable hTable = new HTable(job.getConfiguration(), tableName);
         HFileOutputFormat.configureIncrementalLoad(job, hTable);
 
@@ -173,22 +171,15 @@ public class SimpleImportAvro {
 
         schema = discoverSchema(conf.get("importavro.inputPath"));
         tableName = conf.get("importavro.tableName");
-        rowKeyName = conf.get("importavro.rowkey");
-        columnFamily = conf.get("importavro.columnf");
-
-        System.out.println("hbase-location1 : " + conf.get("importavro.hbase.zookeeper.quorum"));
-        System.out.println("hbase-location2 : " + conf.get(HBASE_CONFIGURATION_ZOOKEEPER_QUORUM));
 
         Job job = createSubmitableJob(conf);
 
-        System.out.println("hbase-location3 : " + job.getConfiguration().get(HBASE_CONFIGURATION_ZOOKEEPER_QUORUM));
         HBaseAdmin hBaseAdmin = new HBaseAdmin(job.getConfiguration());
         if(!hBaseAdmin.tableExists(tableName))
         {
             System.out.println("Hbase table " + tableName + " does not exist");
             System.exit(-1);
         }
-
         job.waitForCompletion(true);
 
         if(conf.get("importavro.upload").equals("1"))
