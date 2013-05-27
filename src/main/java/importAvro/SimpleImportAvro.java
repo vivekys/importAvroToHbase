@@ -115,7 +115,6 @@ public class SimpleImportAvro {
         
         HTable hTable = new HTable(job.getConfiguration(), tableName);
         HFileOutputFormat.configureIncrementalLoad(job, hTable);
-        System.out.println("Printing to check CreateJob Fn" + tableName);
         return job;
     }
 
