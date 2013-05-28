@@ -1,6 +1,5 @@
 package importAvro;
 
-
 import org.apache.avro.Schema;
 import org.apache.avro.file.DataFileReader;
 import org.apache.avro.generic.GenericData;
@@ -13,6 +12,7 @@ import org.apache.avro.mapreduce.AvroJob;
 import org.apache.avro.mapreduce.AvroKeyInputFormat;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hbase.HColumnDescriptor;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.client.HBaseAdmin;
 import org.apache.hadoop.hbase.client.HTable;
@@ -26,17 +26,22 @@ import org.apache.hadoop.mapreduce.Mapper;
 import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
 import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
 import org.apache.hadoop.util.GenericOptionsParser;
+import org.apache.hadoop.hbase.HTableDescriptor;
+
+//import org.apache.commons.cli.Options;
 
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+
+
 
 public class SimpleImportAvro {
     private static String HBASE_CONFIGURATION_ZOOKEEPER_QUORUM = "hbase.zookeeper.quorum";
     private static String HBASE_CONFIGURATION_ZOOKEEPER_CLIENTPORT = "hbase.zookeeper.property.clientPort";
 
     private static Schema schema;
-    private static String tableName;
+    private static String tableName,deleteOption,createIfNotPresent,columnf;
 
     private static DataFileReader<GenericRecord> read(Path filename) throws IOException
     {
@@ -89,8 +94,8 @@ public class SimpleImportAvro {
 
     private static Job createSubmitableJob(Configuration conf) throws IOException
     {
-        conf.set(HBASE_CONFIGURATION_ZOOKEEPER_QUORUM, conf.get("importavro.hbase.zookeeper.quorum"));
-        conf.set(HBASE_CONFIGURATION_ZOOKEEPER_CLIENTPORT, conf.get("importavro.hbase.zookeeper.property.clientPort"));
+        //conf.set(HBASE_CONFIGURATION_ZOOKEEPER_QUORUM, conf.get("importavro.hbase.zookeeper.quorum"));
+        //conf.set(HBASE_CONFIGURATION_ZOOKEEPER_CLIENTPORT, conf.get("importavro.hbase.zookeeper.property.clientPort"));
         conf.set("hbase.table.name", tableName);
 
         Job job = new Job(conf);
@@ -107,13 +112,24 @@ public class SimpleImportAvro {
         job.setMapOutputKeyClass(ImmutableBytesWritable.class);
         job.setMapOutputValueClass(KeyValue.class);
         job.setInputFormatClass(AvroKeyInputFormat.class);
-
+        
         HTable hTable = new HTable(job.getConfiguration(), tableName);
         HFileOutputFormat.configureIncrementalLoad(job, hTable);
-
         return job;
     }
 
+    //Function for Deleting HbaseTable
+    private static void deleteHbaseTable(HBaseAdmin hBaseAdmin,String tableName) throws IOException 
+    {
+    	if(!hBaseAdmin.tableExists(tableName))
+    	{
+    		 System.out.println(tableName + "does not exist");
+    		 System.exit(-1);
+    	}
+    	//Deleting HbaseTable
+    	hBaseAdmin.disableTable(tableName);
+    	hBaseAdmin.deleteTable(tableName);
+    }
 
     /* -Dimportavro.inputPath = path
      * -Dimportavro.outputPath = path
@@ -122,13 +138,18 @@ public class SimpleImportAvro {
      * -Dimportavro.tableName = tableName
      * -Dimportavro.hbase.zookeeper.quorum =
      * -Dimportavro.hbase.zookeeper.property.clientPort =
-     * -Dimportavro.upload=<1/0> if 1 upload
+     * -Dimportavro.upload = <1/0> if 1 upload
+     * -Dimportavro.createIfNotPresent = <1/0> if 1 create hbase table if not present
+     * -Dimportavro.deleteOption = <1/0> if 1 delete hbase table
      */
     public static void main(String[] args) throws Exception {
         System.out.println(">> ImportAvro");
         Configuration conf = new Configuration();
-        String[] otherArgs = new GenericOptionsParser(conf, args).getRemainingArgs();
-        //Validate & initialize
+        
+        
+		@SuppressWarnings("unused")
+		String[] otherArgs = new GenericOptionsParser(conf, args).getRemainingArgs();
+		//Validate & initialize
         if(conf.get("importavro.inputPath") == null)
         {
             System.out.println("Need to specify input path of avro files");
@@ -169,17 +190,50 @@ public class SimpleImportAvro {
                 System.exit(-1);
         }
 
+        conf.set(HBASE_CONFIGURATION_ZOOKEEPER_QUORUM, conf.get("importavro.hbase.zookeeper.quorum"));
+        conf.set(HBASE_CONFIGURATION_ZOOKEEPER_CLIENTPORT, conf.get("importavro.hbase.zookeeper.property.clientPort"));
+        
+        
         schema = discoverSchema(conf.get("importavro.inputPath"));
         tableName = conf.get("importavro.tableName");
-
-        Job job = createSubmitableJob(conf);
-
-        HBaseAdmin hBaseAdmin = new HBaseAdmin(job.getConfiguration());
+        //Optional arguments
+        deleteOption = conf.get("importavro.deleteOption");
+        createIfNotPresent = conf.get("importavro.createIfNotPresent");
+        columnf = conf.get("importavro.columnf");
+        HBaseAdmin hBaseAdmin = new HBaseAdmin(conf);
+        
+        
+        if(deleteOption != null)
+        {
+        	if(deleteOption.equals("1"))
+        	{
+        		deleteHbaseTable(hBaseAdmin,tableName);
+        		System.out.println("Deleted the hbase table--" + tableName);
+        		System.exit(-1);
+        	}
+        }
         if(!hBaseAdmin.tableExists(tableName))
         {
-            System.out.println("Hbase table " + tableName + " does not exist");
-            System.exit(-1);
+        	System.out.println("Hbase table " + tableName + " does not exist");
+        	//Creating Hbase Table here
+        	if(createIfNotPresent == null)
+ 	       	{
+        		System.exit(-1);
+ 	       	}
+        	if(createIfNotPresent.equals("1"))
+        	{
+        		HTableDescriptor htd = new HTableDescriptor(tableName);
+        	    htd.addFamily(new HColumnDescriptor(columnf));
+        		hBaseAdmin.createTable(htd);
+        		System.out.println("Created the hbase table--" + tableName);
+        	}
+        	else
+        	{
+        		System.exit(-1);
+        	}           
         }
+        Job job = createSubmitableJob(conf);
+
         job.waitForCompletion(true);
 
         if(conf.get("importavro.upload").equals("1"))
