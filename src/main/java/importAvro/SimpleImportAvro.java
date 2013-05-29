@@ -28,8 +28,6 @@ import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
 import org.apache.hadoop.util.GenericOptionsParser;
 import org.apache.hadoop.hbase.HTableDescriptor;
 
-//import org.apache.commons.cli.Options;
-
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
@@ -41,7 +39,10 @@ public class SimpleImportAvro {
     private static String HBASE_CONFIGURATION_ZOOKEEPER_CLIENTPORT = "hbase.zookeeper.property.clientPort";
 
     private static Schema schema;
-    private static String tableName,deleteOption,createIfNotPresent,columnf;
+    private static String tableName;
+    private static String deleteOption;
+    private static String createIfNotPresent;
+    private static String columnf;
 
     private static DataFileReader<GenericRecord> read(Path filename) throws IOException
     {
@@ -94,8 +95,6 @@ public class SimpleImportAvro {
 
     private static Job createSubmitableJob(Configuration conf) throws IOException
     {
-        //conf.set(HBASE_CONFIGURATION_ZOOKEEPER_QUORUM, conf.get("importavro.hbase.zookeeper.quorum"));
-        //conf.set(HBASE_CONFIGURATION_ZOOKEEPER_CLIENTPORT, conf.get("importavro.hbase.zookeeper.property.clientPort"));
         conf.set("hbase.table.name", tableName);
 
         Job job = new Job(conf);
@@ -118,7 +117,6 @@ public class SimpleImportAvro {
         return job;
     }
 
-    //Function for Deleting HbaseTable
     private static void deleteHbaseTable(HBaseAdmin hBaseAdmin,String tableName) throws IOException 
     {
     	if(!hBaseAdmin.tableExists(tableName))
@@ -126,7 +124,7 @@ public class SimpleImportAvro {
     		 System.out.println(tableName + "does not exist");
     		 System.exit(-1);
     	}
-    	//Deleting HbaseTable
+    	
     	hBaseAdmin.disableTable(tableName);
     	hBaseAdmin.deleteTable(tableName);
     }
@@ -145,9 +143,7 @@ public class SimpleImportAvro {
     public static void main(String[] args) throws Exception {
         System.out.println(">> ImportAvro");
         Configuration conf = new Configuration();
-        
-        
-		@SuppressWarnings("unused")
+        @SuppressWarnings("unused")
 		String[] otherArgs = new GenericOptionsParser(conf, args).getRemainingArgs();
 		//Validate & initialize
         if(conf.get("importavro.inputPath") == null)
@@ -192,16 +188,13 @@ public class SimpleImportAvro {
 
         conf.set(HBASE_CONFIGURATION_ZOOKEEPER_QUORUM, conf.get("importavro.hbase.zookeeper.quorum"));
         conf.set(HBASE_CONFIGURATION_ZOOKEEPER_CLIENTPORT, conf.get("importavro.hbase.zookeeper.property.clientPort"));
-        
+        tableName 			= conf.get("importavro.tableName");
+        deleteOption 		= conf.get("importavro.deleteOption");
+        createIfNotPresent  = conf.get("importavro.createIfNotPresent");
+        columnf 			= conf.get("importavro.columnf");
         
         schema = discoverSchema(conf.get("importavro.inputPath"));
-        tableName = conf.get("importavro.tableName");
-        //Optional arguments
-        deleteOption = conf.get("importavro.deleteOption");
-        createIfNotPresent = conf.get("importavro.createIfNotPresent");
-        columnf = conf.get("importavro.columnf");
         HBaseAdmin hBaseAdmin = new HBaseAdmin(conf);
-        
         
         if(deleteOption != null)
         {
@@ -212,10 +205,11 @@ public class SimpleImportAvro {
         		System.exit(-1);
         	}
         }
+
         if(!hBaseAdmin.tableExists(tableName))
         {
         	System.out.println("Hbase table " + tableName + " does not exist");
-        	//Creating Hbase Table here
+        	
         	if(createIfNotPresent == null)
  	       	{
         		System.exit(-1);
@@ -232,8 +226,8 @@ public class SimpleImportAvro {
         		System.exit(-1);
         	}           
         }
+        
         Job job = createSubmitableJob(conf);
-
         job.waitForCompletion(true);
 
         if(conf.get("importavro.upload").equals("1"))
